@@ -1,0 +1,341 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ADMIN
+  OPERATIONS_MANAGER
+  OPERATIONS_SPECIALIST
+  ACCOUNTING_SPECIALIST
+  INDIVIDUAL_CUSTOMER
+  CORPORATE_CUSTOMER
+  COURIER
+}
+
+enum CourierType {
+  MOTORCYCLE
+  CAR
+}
+
+/** Kurye kayıt → admin → evrak → aktif akışı */
+enum CourierWorkflowStatus {
+  PENDING
+  PRE_APPROVED
+  DOCUMENT_PENDING
+  DOCUMENT_REVIEW
+  APPROVED
+  REJECTED
+}
+
+enum CourierDocumentType {
+  ID_FRONT
+  LICENSE_FRONT
+  LICENSE_BACK
+  RESIDENCE
+  CRIMINAL_RECORD
+}
+
+enum CourierDocumentReviewStatus {
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+}
+
+enum OrderStatus {
+  PENDING
+  SEARCHING_COURIER
+  ACCEPTED
+  PICKED_UP
+  ON_DELIVERY
+  DELIVERED
+  CANCELLED
+}
+
+enum OrderOfferStatus {
+  PENDING
+  ACCEPTED
+  SUPERSEDED
+  EXPIRED
+}
+
+enum ErpCustomerType {
+  INDIVIDUAL
+  CORPORATE
+}
+
+enum AccountTransactionType {
+  DEBIT
+  CREDIT
+}
+
+enum CourierEarningStatus {
+  PENDING
+  REQUESTED
+  PAID
+}
+
+enum PayoutRequestStatus {
+  PENDING
+  APPROVED
+  PAID
+  REJECTED
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  role      Role
+  createdAt DateTime @default(now())
+
+  courierProfile   Courier?
+  customerProfile  Customer?
+  ordersAsCustomer Order[] @relation("CustomerOrders")
+  courierRatings   CourierRating[]
+}
+
+model Courier {
+  id       String      @id @default(cuid())
+  userId   String      @unique
+  user     User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /** Panelde gösterilen Türkçe ad soyad (yoksa e-posta kullanılır) */
+  fullName String?
+  type     CourierType
+  workflowStatus CourierWorkflowStatus @default(PENDING)
+  phone          String?
+  birthDate      DateTime?             @db.Date
+  tcNo           String?               @unique
+  plateNumber    String?
+  hasCompany     Boolean               @default(false)
+  companyTaxId   String?
+  companyTaxOffice String?
+  companyAddress String?
+  residenceAddress String?
+  photoUrl       String?
+  rejectionReason String?
+  isOnline Boolean     @default(false)
+  lat      Float?
+  lng      Float?
+  bankName            String?
+  accountHolderName   String?
+  iban                String?
+  /** 1.00–5.00; müşteri puanlarından türetilir */
+  averageRating       Decimal? @db.Decimal(4, 2)
+  totalRatings        Int      @default(0)
+  /** 0–100 dispatch / eşleştirme skoru */
+  dispatchScore       Decimal  @default(50) @db.Decimal(5, 2)
+
+  orders          Order[]
+  orderOffers     OrderCourierOffer[]
+  earnings        CourierEarning[]
+  payoutRequests  PayoutRequest[]
+  ratings         CourierRating[]
+  performance     CourierPerformance?
+  documents       CourierDocument[]
+}
+
+model CourierDocument {
+  id               String                      @id @default(cuid())
+  courierId        String
+  courier          Courier                     @relation(fields: [courierId], references: [id], onDelete: Cascade)
+  type             CourierDocumentType
+  fileUrl          String
+  reviewStatus     CourierDocumentReviewStatus @default(PENDING_REVIEW)
+  rejectionReason  String?
+  createdAt        DateTime                    @default(now())
+  updatedAt        DateTime                    @updatedAt
+
+  @@unique([courierId, type])
+}
+
+model Order {
+  id          String      @id @default(cuid())
+  customerId  String
+  customer    User        @relation("CustomerOrders", fields: [customerId], references: [id])
+  courierId   String?
+  courier     Courier?    @relation(fields: [courierId], references: [id])
+  status      OrderStatus @default(PENDING)
+  pickupLat   Float
+  pickupLng   Float
+  deliveryLat Float
+  deliveryLng Float
+  price       Decimal     @db.Decimal(12, 2)
+  createdAt   DateTime    @default(now())
+  /** İlk kez DELIVERED olunca set edilir (ortalama süre metrikleri için) */
+  deliveredAt DateTime?
+
+  /** Sipariş anındaki fiyat kuralı (kurallar değişse bile geçmiş doğru kalır) */
+  pricingRuleId String?
+  pricingRule   PricingRule? @relation(fields: [pricingRuleId], references: [id], onDelete: SetNull)
+  /** 0–1; kurye payı. Eski kayıtlarda null olabilir. */
+  courierSharePercent      Decimal? @db.Decimal(6, 5)
+  courierEarningAmount     Decimal? @db.Decimal(12, 2)
+  platformCommissionAmount Decimal? @db.Decimal(12, 2)
+
+  offers         OrderCourierOffer[]
+  courierEarning CourierEarning?
+  courierRating  CourierRating?
+
+  @@index([customerId])
+  @@index([courierId])
+  @@index([status])
+  @@index([pricingRuleId])
+}
+
+/// ERP müşteri kartı (User ile 1:1, yalnızca müşteri rolleri)
+model Customer {
+  id        String          @id @default(cuid())
+  userId    String          @unique
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  type      ErpCustomerType
+  phone     String?
+  email     String
+  address   String?
+  taxNumber String?
+  /** Kurumsal müşteride ADMIN ile açılır; borç limiti dahilinde sipariş */
+  creditEnabled Boolean           @default(false)
+  creditLimit   Decimal?          @db.Decimal(14, 2)
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  account       CustomerAccount?
+  transactions  CustomerTransaction[]
+  pricingRules  PricingRule[]
+
+  @@index([email])
+}
+
+model CustomerAccount {
+  id         String   @id @default(cuid())
+  customerId String   @unique
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  balance    Decimal  @default(0) @db.Decimal(14, 2)
+  updatedAt  DateTime @updatedAt
+}
+
+model CustomerTransaction {
+  id          String                 @id @default(cuid())
+  customerId  String
+  customer    Customer               @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  type        AccountTransactionType
+  amount      Decimal                @db.Decimal(14, 2)
+  description String?
+  createdAt   DateTime               @default(now())
+
+  @@index([customerId])
+  @@index([createdAt])
+}
+
+model PricingRule {
+  id         String    @id @default(cuid())
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  basePrice  Decimal   @db.Decimal(12, 2)
+  perKmPrice Decimal   @db.Decimal(12, 4)
+  /** Taban + km sonrası uygulanacak taban alt sınır */
+  minPrice            Decimal  @default(0) @db.Decimal(12, 2)
+  /** Öncelikli sipariş çarpanı (ör. 1.15) */
+  priorityMultiplier  Decimal  @default(1) @db.Decimal(8, 4)
+  /** Gece tarifesi çarpanı (Europe/Istanbul saatine göre) */
+  nightMultiplier     Decimal  @default(1) @db.Decimal(8, 4)
+  /** 0–1; null ise DEFAULT_COURIER_SHARE_PERCENT / COURIER_EARNING_RATIO */
+  courierSharePercent Decimal? @db.Decimal(6, 5)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  orders Order[]
+
+  @@index([customerId])
+}
+
+model CourierEarning {
+  id              String               @id @default(cuid())
+  courierId       String
+  courier         Courier              @relation(fields: [courierId], references: [id], onDelete: Cascade)
+  orderId         String               @unique
+  order           Order                @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  amount          Decimal              @db.Decimal(12, 2)
+  status          CourierEarningStatus @default(PENDING)
+  createdAt       DateTime             @default(now())
+  payoutRequestId String?
+  payoutRequest   PayoutRequest?       @relation(fields: [payoutRequestId], references: [id], onDelete: SetNull)
+
+  @@index([courierId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([payoutRequestId])
+}
+
+model PayoutRequest {
+  id         String              @id @default(cuid())
+  courierId  String
+  courier    Courier             @relation(fields: [courierId], references: [id], onDelete: Cascade)
+  amount     Decimal             @db.Decimal(12, 2)
+  status     PayoutRequestStatus @default(PENDING)
+  receiptUrl String?
+  createdAt  DateTime            @default(now())
+  updatedAt  DateTime            @updatedAt
+  earnings   CourierEarning[]
+
+  @@index([courierId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model OrderCourierOffer {
+  id        String           @id @default(cuid())
+  orderId   String
+  order     Order            @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  courierId String
+  courier   Courier          @relation(fields: [courierId], references: [id], onDelete: Cascade)
+  status    OrderOfferStatus @default(PENDING)
+  createdAt DateTime         @default(now())
+
+  @@unique([orderId, courierId])
+  @@index([orderId])
+  @@index([courierId])
+}
+
+model CourierRating {
+  id         String   @id @default(cuid())
+  courierId  String
+  courier    Courier  @relation(fields: [courierId], references: [id], onDelete: Cascade)
+  orderId    String   @unique
+  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  customerId String
+  customer   User     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  rating     Int
+  comment    String?
+  createdAt  DateTime @default(now())
+
+  @@index([courierId])
+  @@index([createdAt])
+}
+
+/** Tek satır (id = default) — white-label logo ve uygulama adı */
+model SystemSettings {
+  id        String   @id @default("default")
+  logoUrl   String?
+  appName   String   @default("Teslimatjet")
+  updatedAt DateTime @updatedAt
+}
+
+model CourierPerformance {
+  id                         String   @id @default(cuid())
+  courierId                  String   @unique
+  courier                    Courier  @relation(fields: [courierId], references: [id], onDelete: Cascade)
+  /** Atanmış ve kapanmış iş: teslim + iptal */
+  totalDeliveries            Int      @default(0)
+  successfulDeliveries       Int      @default(0)
+  cancelledDeliveries        Int      @default(0)
+  averageDeliveryTimeMinutes Decimal? @db.Decimal(10, 2)
+  lastActiveAt               DateTime?
+  updatedAt                DateTime @updatedAt
+
+  @@index([courierId])
+}

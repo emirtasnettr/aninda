@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/ci?schema=public
+      JWT_SECRET: ci-jwt-secret-min-32-chars-long!!
+      NEXT_PUBLIC_API_URL: http://127.0.0.1:3000
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            admin-panel/package-lock.json
+            courier-app/package-lock.json
+            customer-app/package-lock.json
+
+      - name: Install dependencies (API)
+        run: npm ci
+
+      - name: Install dependencies (admin-panel)
+        run: npm ci --prefix admin-panel
+
+      - name: Install dependencies (courier-app)
+        run: npm ci --prefix courier-app
+
+      - name: Install dependencies (customer-app)
+        run: npm ci --prefix customer-app
+
+      - name: Lint API
+        run: npm run lint
+
+      - name: Unit tests (API)
+        run: npm test
+
+      - name: Build all (API + admin + mobile typecheck)
+        run: npm run build:all

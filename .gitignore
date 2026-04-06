@@ -1,0 +1,14 @@
+node_modules
+dist
+admin-panel/.next
+admin-panel/out
+uploads/branding/*
+!uploads/branding/.gitkeep
+uploads/courier-photos/*
+!uploads/courier-photos/.gitkeep
+uploads/courier-documents/*
+!uploads/courier-documents/.gitkeep
+# Keep environment variables out of version control
+.env
+
+/generated/prisma
